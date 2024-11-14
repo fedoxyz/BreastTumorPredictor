@@ -1,0 +1,25 @@
+train:
+  batch_size: 16
+  learning_rate: 0.0001
+  epochs: 50
+  weight_decay: 1e-5
+  device: "cuda"  # or "cpu"
+  log_frequency: 100  # Log every 100 steps
+  save_dir: "./src"
+  checkpoint_frequency: 2
+
+data:
+  img_size: [512, 512]
+  dir: "../data/breast_ultrasonic_dataset"
+  augmentation:
+    flip: True
+    rotation: 15  # degrees
+  num_classes: 5
+
+features_model:
+  architecture: "resnet50"
+
+seg_model:
+  path: "./checkpoints/sam2/sam2.1_hiera_small.pt"
+  download_file: "./checkpoints/sam2/download.sh"
+  config: "./config/sam2/sam2.1_hiera_s.yaml"  

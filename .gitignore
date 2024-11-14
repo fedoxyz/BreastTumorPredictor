@@ -1,0 +1,4 @@
+.aider*
+.env
+venv
+checkpoints/sam2/*.pth
