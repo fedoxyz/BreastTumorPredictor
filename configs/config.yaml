@@ -5,7 +5,7 @@ train:
   weight_decay: 1e-5
   device: "cuda"  # or "cpu"
   log_frequency: 100  # Log every 100 steps
-  save_dir: "./src"
+  save_dir: "../checkpoints"
   checkpoint_frequency: 2
 
 data:
