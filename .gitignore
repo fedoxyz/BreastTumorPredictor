@@ -2,4 +2,4 @@
 .env
 venv
 checkpoints/sam2/*.pth
-**/_pycache__
+**/__pycache__/
