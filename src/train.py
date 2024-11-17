@@ -38,6 +38,11 @@ def split_dataset(dataset, test_size=0.2):
     )
     return train_idx, val_idx
 
+
+def objective(trial):
+    device = : 
+
+
 def train_model(config):
     # Set device
     device = torch.device(config["train"]["device"])

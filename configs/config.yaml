@@ -18,6 +18,9 @@ data:
 
 features_model:
   architecture: "resnet50"
+  train_last_n_layers: 2  # Number of last layers to train
+  train_layer4: True      # Train the entire layer4
+  train_bn: True          # Train all batch norm layers
 
 seg_model:
   path: "./checkpoints/sam2/sam2.1_hiera_small.pt"
