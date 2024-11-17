@@ -5,12 +5,11 @@ from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
 import json
 import os
-from sklearn.model_selection import train_test_split
 import numpy as np
 from preprocessor import ImageDataset
 from model import BreastTumorModel
 from loss_funcs import CombinedLoss
-from utils import load_config
+from utils import load_config, split_dataset, calculate_iou
 
 def train_model(config=load_config()):
     # Set device
@@ -18,7 +17,6 @@ def train_model(config=load_config()):
     
     # Create dataset
     dataset = ImageDataset(
-        data_dir=config["data"]["dir"],
         config=config
     )
     
@@ -45,10 +43,16 @@ def train_model(config=load_config()):
         pin_memory=True
     )
     
+
     # Initialize model
     model = BreastTumorModel(config).to(device)
    
-    criterion_seg = CombinedLoss(weight_bce=1.0, weight_dice=1.0, weight_iou=1.0, weight_focal=1.0)
+    weight_bce = config["train"]["weight_bce"]
+    weight_dice = config["train"]["weight_dice"]
+    weight_iou = config["train"]["weight_iou"]
+    weight_focal = config["train"]["weight_focal"]
+
+    criterion_seg = CombinedLoss(weight_bce=weight_bce, weight_dice=weight_dice, weight_iou=weight_iou, weight_focal=weight_focal)
     criterion_class = nn.CrossEntropyLoss()
     
     # Initialize optimizer

@@ -7,6 +7,8 @@ from model import BreastTumorModel
 from loss_funcs import CombinedLoss
 from utils import load_config, dump_config, split_dataset
 import optuna
+from torchinfo import summary
+
 
 
 def objective(trial):
@@ -21,9 +23,10 @@ def objective(trial):
     weight_dice = trial.suggest_float('weight_dice', 0.1, 2.0)
     weight_iou = trial.suggest_float('weight_iou', 0.1, 2.0)
     weight_focal = trial.suggest_float('weight_focal', 0.1, 2.0)
+    class_weight = trial.suggest_float('class_weight', 0.3, 2.0)
 
     # Load dataset and create data loaders
-    dataset = ImageDataset(data_dir=config["data"]["dir"], config=config)
+    dataset = ImageDataset(config=config)
     train_idx, val_idx = split_dataset(dataset)
     train_dataset = torch.utils.data.Subset(dataset, train_idx)
     val_dataset = torch.utils.data.Subset(dataset, val_idx)
@@ -31,7 +34,12 @@ def objective(trial):
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     # Initialize model, optimizer, and loss functions
-    model = BreastTumorModel(config).to(device)
+    model = BreastTumorModel(config, trial).to(device)
+    model = BreastTumorModel(config)
+
+    # Print the model summary
+    input_size = (1, 3, 512, 512)  # Adjust the input size according to your model's requirements
+    summary(model, input_size=input_size)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     criterion_seg = CombinedLoss(weight_bce=weight_bce, weight_dice=weight_dice, weight_iou=weight_iou, weight_focal=weight_focal)
     criterion_class = nn.CrossEntropyLoss()
@@ -49,7 +57,7 @@ def objective(trial):
             class_output, seg_output = model(images)
             loss_seg = criterion_seg(seg_output, masks)
             loss_class = criterion_class(class_output, labels)
-            loss = loss_seg + config["train"]["class_weight"] * loss_class
+            loss = loss_seg + class_weight * loss_class
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
@@ -75,25 +83,30 @@ def objective(trial):
 
     return val_loss / len(val_loader)
 
+def save_params(config, trial):
+    # Save the configuration including suggested hyperparameters
+    config_to_save = config.copy()
+    if trial:
+        # Include suggested hyperparameters from the trial
+        config_to_save["train"]["learning_rate"] = trial.params["learning_rate"]
+        config_to_save["train"]["weight_decay"] = trial.params["weight_decay"]
+        config_to_save["train"]["batch_size"] = trial.params["batch_size"]
+        config_to_save["train"]["weight_bce"] = trial.params["weight_bce"]
+        config_to_save["train"]["weight_dice"] = trial.params["weight_dice"]
+        config_to_save["train"]["weight_iou"] = trial.params["weight_iou"]
+        config_to_save["train"]["weight_focal"] = trial.params["weight_focal"]
+        config_to_save["train"]["class_weight"] = trial.params["class_weight"]
+
+    # Save updated config
+    dump_config(config_to_save)
 
 if __name__ == "__main__":
     config = load_config()
 
+    # Create a study and optimize the objective function
     study = optuna.create_study(direction='minimize')
     study.optimize(objective, n_trials=50)
-    
-    # Get the best trial parameters
-    best_trial = study.best_trial
-    best_params = best_trial.params
-    
-    # Update the configuration with the best hyperparameters
-    config["train"]["learning_rate"] = best_params["learning_rate"]
-    config["train"]["weight_decay"] = best_params["weight_decay"]
-    config["train"]["batch_size"] = best_params["batch_size"]
-    config["train"]["weight_bce"] = best_params["weight_bce"]
-    config["train"]["weight_dice"] = best_params["weight_dice"]
-    config["train"]["weight_iou"] = best_params["weight_iou"]
-    config["train"]["weight_focal"] = best_params["weight_focal"]
-    config["train"]["optimizer"] = best_params["optimizer"]
 
-    dump_config(config)
+    # Get the best trial and save parameters
+    best_trial = study.best_trial
+    save_params(config, best_trial)

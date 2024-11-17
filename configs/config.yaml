@@ -25,5 +25,5 @@ features_model:
 
 seg_model:
   path: "checkpoints/sam2/sam2.1_hiera_small.pt"
-  download_file: "checkpoints/sam2/download.sh"
-  config: "config/sam2/sam2.1_hiera_s.yaml"  
+  download_file_path: "checkpoints/sam2/download.sh"
+  config_path: "configs/sam2/sam2_hiera_s.yaml"  

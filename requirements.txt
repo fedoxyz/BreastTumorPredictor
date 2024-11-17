@@ -8,3 +8,4 @@ tqdm
 opencv-python
 pyyaml
 git+https://github.com/facebookresearch/sam2.git#egg=sam-2
+optuna

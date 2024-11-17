@@ -4,7 +4,7 @@ from torchvision import models
 from sam2.build_sam import build_sam2
 import subprocess
 import os
-from torch import F
+import torch.nn.functional as F
 
 class FeatureExtractor(nn.Module):
     def __init__(self, config):
@@ -13,7 +13,7 @@ class FeatureExtractor(nn.Module):
         self.feature_dim = self.model.fc.in_features
         self.model.fc = nn.Identity()
 
-        self._setup_feature_extractor_training(config["feature_model"])
+        self._setup_feature_extractor_training(config["features_model"])
 
     def _setup_feature_extractor_training(self, config):
         # Helper function to freeze or unfreeze layers
@@ -22,21 +22,21 @@ class FeatureExtractor(nn.Module):
                 param.requires_grad = requires_grad
         
         # First, freeze everything
-        set_requires_grad(self.feature_extractor, False)
+        set_requires_grad(self.model, False)
         
         # Unfreeze specific parts based on config
         if config["train_layer4"]:
-            set_requires_grad(self.feature_extractor.layer4, True)
+            set_requires_grad(self.model.layer4, True)
         
         if config["train_bn"]:
-            for m in self.feature_extractor.modules():
+            for m in self.model.modules():
                 if isinstance(m, (nn.BatchNorm2d,)):
                     set_requires_grad(m, True)
         
         # Unfreeze last n layers
         if config["train_last_n_layers"] > 0:
             layers_to_train = []
-            for m in self.feature_extractor.modules():
+            for m in self.model.modules():
                 if isinstance(m, (nn.Conv2d, nn.BatchNorm2d, nn.ReLU)):
                     layers_to_train.append(m)
             
@@ -163,7 +163,9 @@ class Classifier(nn.Module):
             if i == 0:
                 self.classifier_layers.append(nn.Linear(input_dim, out_features))
             else:
-                self.classifier_layers.append(nn.Linear(self.classifier_layers[-1].out_features, out_features))
+                # Find the last linear layer to get its output features
+                last_linear_layer = [layer for layer in self.classifier_layers if isinstance(layer, nn.Linear)][-1]
+                self.classifier_layers.append(nn.Linear(last_linear_layer.out_features, out_features))
             self.classifier_layers.append(nn.ReLU())
             dropout_rate = trial.suggest_float("dropout_l{}".format(i), 0.15, 0.4) if trial else config["model"][f"dropout_rate_{i}"]
             self.classifier_layers.append(nn.Dropout(dropout_rate))
@@ -190,8 +192,8 @@ class BreastTumorModel(nn.Module):
 
         # Set up SAM-2 model and custom decoder
         checkpoint = config["seg_model"]["path"]
-        download_script = config["seg_model"]["download_file"]
-        model_cfg = config["seg_model"]["config"]
+        download_script = config["seg_model"]["download_file_path"]
+        model_cfg = "../configs/sam2/sam2_hiera_s.yaml"
         
         # Download SAM-2 checkpoint if not exists
         if not os.path.exists(checkpoint):
@@ -203,6 +205,7 @@ class BreastTumorModel(nn.Module):
                 print(f"Failed to download checkpoint file. Error: {e}")
                 raise
         # Initialize SAM-2 model
+        print(f"sam2 model cfg - {model_cfg}")
         sam2_model = build_sam2(model_cfg, checkpoint)
         
         # Create custom decoder using SAM-2 encoder

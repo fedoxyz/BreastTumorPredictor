@@ -4,37 +4,43 @@ import numpy as np
 from torch.utils.data import Dataset
 
 class ImageDataset(Dataset):
-    def __init__(self, data_dir, config):
+    def __init__(self, config):
         self.img_size = config["data"]["img_size"]
-        self.data_dir = data_dir
+        self.data_dir = config["data"]["dir"]
         self.config = config
         self.labels = []
         self.image_files = []
-
-        # Iterate over all class directories inside data_dir
-        class_dirs = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
         
-        for class_label in class_dirs:
-            class_dir = os.path.join(data_dir, class_label)
-            image_dir = os.path.join(class_dir, 'image')
-            mask_dir = os.path.join(class_dir, 'masks')
+        # Iterate over all class directories inside data_dir
+        class_dirs = [d for d in os.listdir(self.data_dir) if os.path.isdir(os.path.join(self.data_dir, d))]
 
-            # Check if image_dir and mask_dir exist
+        for class_label in class_dirs:
+            class_dir = os.path.join(self.data_dir, class_label)
+            image_dir = os.path.join(class_dir, 'images')
+            mask_dir = os.path.join(class_dir, 'masks')
+  
             if not os.path.isdir(image_dir) or not os.path.isdir(mask_dir):
                 continue  # Skip if any directory is missing
 
             class_files = [f for f in os.listdir(image_dir) if f.endswith('.jpg')]
+     
             for file_name in class_files:
-                self.image_files.append(os.path.join('image', file_name))
+                # Append full path relative to class directory
+                self.image_files.append(os.path.join(class_label, 'image', file_name))
                 self.labels.append(int(class_label))  # Store label as integer
+        
 
     def __len__(self):
         return len(self.image_files)
 
     def __getitem__(self, idx):
         # Get image and mask paths based on class label
-        image_path = os.path.join(self.data_dir, str(self.labels[idx]), 'image', self.image_files[idx])
-        mask_path = os.path.join(self.data_dir, str(self.labels[idx]), 'masks', self.image_files[idx].replace('.jpg', '_mask.jpg'))
+        image_path = os.path.join(self.data_dir, self.image_files[idx])
+        mask_path = os.path.join(self.data_dir, self.image_files[idx].replace('image/', 'masks/').replace('.jpg', '_mask.jpg'))
+
+        # Ensure correct path construction
+        image_path = os.path.join(self.data_dir, self.image_files[idx])
+        mask_path = image_path.replace('image/', 'masks/').replace('.jpg', '_mask.jpg')
 
         image = cv2.imread(image_path)[..., ::-1]  # Convert BGR to RGB
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
