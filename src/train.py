@@ -10,40 +10,9 @@ import numpy as np
 from preprocessor import ImageDataset
 from model import BreastTumorModel
 from loss_funcs import CombinedLoss
+from utils import load_config
 
-def calculate_iou(pred_masks, masks):
-    """
-    Calculate Intersection over Union (IoU) for a batch of predictions and ground truth masks.
-    
-    Parameters:
-    - pred_masks (Tensor): Predicted segmentation masks.
-    - masks (Tensor): Ground truth segmentation masks.
-    
-    Returns:
-    - iou (Tensor): IoU for the batch.
-    """
-    intersection = (pred_masks * masks).sum((1, 2, 3))  # Summing over spatial dimensions
-    union = pred_masks.sum((1, 2, 3)) + masks.sum((1, 2, 3)) - intersection
-    iou = intersection / (union + 1e-7)  # Adding small epsilon to avoid division by zero
-    return iou.mean()  # Average IoU for the batch
-
-def split_dataset(dataset, test_size=0.2):
-    """Split dataset indices into train and validation sets."""
-    labels = [label for _, _, label in dataset]  # Assuming dataset is a list of tuples (image, mask, label)
-    train_idx, val_idx = train_test_split(
-        range(len(dataset)), 
-        test_size=test_size, 
-        stratify=labels,
-        random_state=42
-    )
-    return train_idx, val_idx
-
-
-def objective(trial):
-    device = : 
-
-
-def train_model(config):
+def train_model(config=load_config()):
     # Set device
     device = torch.device(config["train"]["device"])
     
@@ -78,7 +47,7 @@ def train_model(config):
     
     # Initialize model
     model = BreastTumorModel(config).to(device)
-    
+   
     criterion_seg = CombinedLoss(weight_bce=1.0, weight_dice=1.0, weight_iou=1.0, weight_focal=1.0)
     criterion_class = nn.CrossEntropyLoss()
     
