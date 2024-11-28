@@ -5,47 +5,8 @@ from sam2.build_sam import build_sam2
 import subprocess
 import os
 import torch.nn.functional as F
+from sam2.modeling.backbones.image_encoder import ImageEncoder, FpnNeck
 
-class FeatureExtractor(nn.Module):
-    def __init__(self, config):
-        super(FeatureExtractor, self).__init__()
-        self.model = models.resnet50(pretrained=True)
-        self.feature_dim = self.model.fc.in_features
-        self.model.fc = nn.Identity()
-
-        self._setup_feature_extractor_training(config["features_model"])
-
-    def _setup_feature_extractor_training(self, config):
-        # Helper function to freeze or unfreeze layers
-        def set_requires_grad(module, requires_grad):
-            for param in module.parameters():
-                param.requires_grad = requires_grad
-        
-        # First, freeze everything
-        set_requires_grad(self.model, False)
-        
-        # Unfreeze specific parts based on config
-        if config["train_layer4"]:
-            set_requires_grad(self.model.layer4, True)
-        
-        if config["train_bn"]:
-            for m in self.model.modules():
-                if isinstance(m, (nn.BatchNorm2d,)):
-                    set_requires_grad(m, True)
-        
-        # Unfreeze last n layers
-        if config["train_last_n_layers"] > 0:
-            layers_to_train = []
-            for m in self.model.modules():
-                if isinstance(m, (nn.Conv2d, nn.BatchNorm2d, nn.ReLU)):
-                    layers_to_train.append(m)
-            
-            # Get the last n layers
-            for layer in layers_to_train[-config["train_last_n_layers"]:]:
-                set_requires_grad(layer, True)
-
-    def forward(self, x):
-        return self.model(x)
 
 
 class LayerNorm2d(nn.Module):
@@ -63,94 +24,109 @@ class LayerNorm2d(nn.Module):
         return x
 
 class SAM2CustomDecoder(nn.Module):
-    def __init__(self, sam2_encoder, sam2_preprocess):
+    def __init__(self, sam2_encoder: ImageEncoder, device):
         super().__init__()
-        self.sam2_encoder = sam2_encoder
-        self.sam2_preprocess = sam2_preprocess
-        
-        # Resolution adapter layer (512 -> 1024)
-        self.resolution_adapter = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, padding=1),
-            LayerNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(32, 3, kernel_size=3, padding=1)
-        )
-        
-        # Freeze the encoder except for the last 6 layers (neck)
-        total_params = len(list(self.sam2_encoder.parameters()))
-        for layer_no, param in enumerate(self.sam2_encoder.parameters()):
-            if layer_no > (total_params - 6):
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
-        
+        self.device = device
+        self.sam2_encoder = sam2_encoder.to(self.device)
+
+        # Decoder blocks to upsample and refine the segmentation mask
         self.decoder = nn.ModuleList([
-            # Block 1: 256x32x32 -> 128x64x64
+            # Block 1: Handles the highest resolution feature map
             nn.Sequential(
-                nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2, padding=0),
-                LayerNorm2d(128),
+                nn.Conv2d(256, 256, kernel_size=1, stride=1, padding=0).to(device),
+                nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2, padding=0).to(device),
+                LayerNorm2d(128).to(device),
                 nn.ReLU(),
                 nn.Dropout(p=0.2)
             ),
-            
-            # Block 2: 128x64x64 -> 64x128x128
+            # Block 2
             nn.Sequential(
-                nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2, padding=0),
-                LayerNorm2d(64),
+                nn.Conv2d(128, 128, kernel_size=1, stride=1, padding=0).to(device),
+                nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2, padding=0).to(device),
+                LayerNorm2d(64).to(device),
                 nn.ReLU(),
                 nn.Dropout(p=0.2)
             ),
-            
-            # Block 3: 64x128x128 -> 32x256x256
+            # Block 3
             nn.Sequential(
-                nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2, padding=0),
-                LayerNorm2d(32),
+                nn.Conv2d(64, 64, kernel_size=1, stride=1, padding=0).to(device),
+                nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2, padding=0).to(device),
+                LayerNorm2d(32).to(device),
                 nn.ReLU(),
                 nn.Dropout(p=0.2)
             ),
-            
-            # Block 4: 32x256x256 -> 16x512x512
+            # Block 4
             nn.Sequential(
-                nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2, padding=0),
-                LayerNorm2d(16),
+                nn.Conv2d(32, 32, kernel_size=1, stride=1, padding=0).to(device),
+                nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2, padding=0).to(device),
+                LayerNorm2d(16).to(device),
                 nn.ReLU(),
                 nn.Dropout(p=0.1)
             ),
-            
             # Final 1x1 conv: 16x512x512 -> 1x512x512
             nn.Sequential(
-                nn.Conv2d(16, 1, kernel_size=1, stride=1, padding=0),
+                nn.Conv2d(16, 1, kernel_size=1, stride=1, padding=0).to(device),
                 nn.Sigmoid()
             )
-        ])
-        
-        self._init_weights()
-    
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-    
+        ])   
+
     def forward(self, x):
-        # Adapt resolution from 512x512 to 1024x1024
-        x = self.resolution_adapter(x)
-        x = F.interpolate(x, size=(1024, 1024), mode='bilinear', align_corners=False)
+        # Ensure input is on the correct device
+        x = x.to(self.device)
+
+        # Process through SAM encoder and neck
+        encoder_output = self.sam2_encoder(x)
         
-        # Process through SAM encoder
-        x = self.sam2_preprocess(x)
-        features = self.sam2_encoder(x)
+        # Extract the feature pyramid network (FPN) features
+        features = encoder_output["backbone_fpn"]
+        
+        # Move features to the correct device
+        features = [f.to(self.device) for f in features]
+        
+        # Use the highest resolution feature map as the starting point
+        x = features[-1]  # Assuming the last feature map is the highest resolution
+        
+        # Reduce initial feature map to 256 channels if needed
+        if x.shape[1] != 256:
+            channel_adapter = nn.Conv2d(
+                x.shape[1], 256, 
+                kernel_size=1, 
+                stride=1, 
+                padding=0
+            ).to(self.device)
+            x = channel_adapter(x)
         
         # Decode back to segmentation mask
-        for decoder_block in self.decoder:
-            features = decoder_block(features)
+        for i, decoder_block in enumerate(self.decoder):
+            # Progressively reduce channels through decoder blocks
+            x = decoder_block(x)
+            
+            if i < len(features) - 1:
+                # Merge or concatenate with the next feature map
+                next_feature_map = features[-i - 2]
+                
+                # Ensure next_feature_map is interpolated to match x's spatial dimensions
+                next_feature_map = F.interpolate(next_feature_map, size=x.shape[-2:], mode='bilinear', align_corners=False)
+                
+                # Reduce next feature map channels to match current x
+                if next_feature_map.shape[1] != x.shape[1]:
+                    channel_adapter = nn.Conv2d(
+                        next_feature_map.shape[1], 
+                        x.shape[1], 
+                        kernel_size=1, 
+                        stride=1, 
+                        padding=0
+                    ).to(self.device)
+                    next_feature_map = channel_adapter(next_feature_map)
+                
+                x = x + next_feature_map
         
         # Ensure output is 512x512
-        if features.shape[-1] != 512:
-            features = F.interpolate(features, size=(512, 512), mode='bilinear', align_corners=False)
+        if x.shape[-1] != 512:
+            x = F.interpolate(x, size=(512, 512), mode='bilinear', align_corners=False)
         
-        return features
+        return x   
+
 
 class Classifier(nn.Module):
     def __init__(self, input_dim, num_classes, config, trial=False):
@@ -177,23 +153,19 @@ class Classifier(nn.Module):
             x = layer(x)
         return x
 
-
 class BreastTumorModel(nn.Module):
     def __init__(self, config, trial=False):
         super(BreastTumorModel, self).__init__()
+
+        device = config["train"]["device"]
         
         # Define number of classes
         num_classes = config["data"]["num_classes"] 
         
-        self.feature_extractor = FeatureExtractor(config)
-        
-        feature_dim = self.feature_extractor.feature_dim
-        self.classifier = Classifier(feature_dim, num_classes, config, trial)
-
-        # Set up SAM-2 model and custom decoder
+        # Set up SAM-2 model
         checkpoint = config["seg_model"]["path"]
         download_script = config["seg_model"]["download_file_path"]
-        model_cfg = "../configs/sam2/sam2_hiera_s.yaml"
+        model_cfg = config["seg_model"]["config"]
         
         # Download SAM-2 checkpoint if not exists
         if not os.path.exists(checkpoint):
@@ -208,18 +180,49 @@ class BreastTumorModel(nn.Module):
         print(f"sam2 model cfg - {model_cfg}")
         sam2_model = build_sam2(model_cfg, checkpoint)
         
+        # Use the SAM 2 encoder for feature extraction
+        self.sam2_encoder = sam2_model.image_encoder.to(device)
+        
         # Create custom decoder using SAM-2 encoder
-        self.sam2_decoder = SAM2CustomDecoder(
-            sam2_encoder=sam2_model.image_encoder,
-            sam2_preprocess=sam2_model.preprocess
+        self.sam2_decoder = SAM2CustomDecoder(sam2_encoder=self.sam2_encoder, device=device)
+        
+        # Classifier for tumor classification
+        self.classifier = Classifier(
+            input_dim=self.calculate_input_dim(device),
+            num_classes=num_classes,
+            config=config,
+            trial=trial
         )
+
+        self.classifier = self.classifier.to(device)
+    
+    def calculate_input_dim(self, device):
+        # Process a dummy input to get the shape of the feature maps
+        dummy_input = torch.randn(1, 3, 512, 512).to(device)
+        encoder_output = self.sam2_encoder(dummy_input)
+        features = encoder_output["backbone_fpn"]
+        classification_features = features[-1]
         
+        classification_features = classification_features.reshape(classification_features.size(0), -1)
+        
+        # Return the flattened dimension
+        return classification_features.shape[1]
+
+
     def forward(self, x):
-        # Extract features for classification
-        features = self.feature_extractor(x)
+        # Process through SAM encoder and neck
+        encoder_output = self.sam2_encoder(x)
         
+        # Extract the feature pyramid network (FPN) features
+        features = encoder_output["backbone_fpn"]
+        
+        # Extract the highest resolution feature map for classification
+        classification_features = features[-1]
+        
+        classification_features = classification_features.reshape(classification_features.size(0), -1)
+
         # Classification output
-        class_output = self.classifier(features)
+        class_output = self.classifier(classification_features)
         
         # Segmentation output using custom decoder
         segmentation_output = self.sam2_decoder(x)
@@ -231,3 +234,4 @@ class BreastTumorModel(nn.Module):
         total_params = sum(p.numel() for p in self.parameters())
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         return total_params, trainable_params
+

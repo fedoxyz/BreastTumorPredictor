@@ -8,7 +8,7 @@ from loss_funcs import CombinedLoss
 from utils import load_config, dump_config, split_dataset
 import optuna
 from torchinfo import summary
-
+from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
 
 
 def objective(trial):
@@ -25,6 +25,13 @@ def objective(trial):
     weight_focal = trial.suggest_float('weight_focal', 0.1, 2.0)
     class_weight = trial.suggest_float('class_weight', 0.3, 2.0)
 
+    optimizer_type = trial.suggest_categorical('optimizer', ['adam', 'adamw', 'sgd'])
+    scheduler_type = trial.suggest_categorical('scheduler', ['StepLR', 'CosineAnnealingLR'])
+
+    momentum = trial.suggest_float('momentum', 0.5, 0.95)
+    beta1 = trial.suggest_float('beta1', 0.85, 0.99)
+    beta2 = trial.suggest_float('beta2', 0.9, 0.999)
+
     # Load dataset and create data loaders
     dataset = ImageDataset(config=config)
     train_idx, val_idx = split_dataset(dataset)
@@ -35,12 +42,24 @@ def objective(trial):
 
     # Initialize model, optimizer, and loss functions
     model = BreastTumorModel(config, trial).to(device)
-    model = BreastTumorModel(config)
 
     # Print the model summary
     input_size = (1, 3, 512, 512)  # Adjust the input size according to your model's requirements
     summary(model, input_size=input_size)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
+    # Optimizer setup
+    if optimizer_type == 'adam':
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(beta1, beta2), weight_decay=weight_decay)
+    elif optimizer_type == 'adamw':
+        optimizer = optim.AdamW(model.parameters(), lr=learning_rate, betas=(beta1, beta2), weight_decay=weight_decay)
+    else:
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum = momentum, weight_delay=weight_decay)
+
+    if scheduler_type == 'StepLR':
+        scheduler = StepLR(optimizer, step_size=10, gamma=0.7)
+    elif scheduler_type == 'CosineAnnealingLR':
+        scheduler = CosineAnnealingLR(optimizer, T_max=10)  # Decay over 10 epochs
+
     criterion_seg = CombinedLoss(weight_bce=weight_bce, weight_dice=weight_dice, weight_iou=weight_iou, weight_focal=weight_focal)
     criterion_class = nn.CrossEntropyLoss()
 
@@ -61,6 +80,8 @@ def objective(trial):
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
+
+        scheduler.step()
 
         # Validation phase
         model.eval()
@@ -96,6 +117,11 @@ def save_params(config, trial):
         config_to_save["train"]["weight_iou"] = trial.params["weight_iou"]
         config_to_save["train"]["weight_focal"] = trial.params["weight_focal"]
         config_to_save["train"]["class_weight"] = trial.params["class_weight"]
+        config_to_save["train"]["optimizer"] = trial.params["optimizer"]
+        config_to_save["train"]["scheduler"] = trial.params["scheduler"]
+        config_to_save["train"]["momentum"] = trial.params["momentum"]
+        config_to_save["train"]["beta1"] = trial.params["beta1"]
+        config_to_save["train"]["beta2"] = trial.params["beta2"]
 
     # Save updated config
     dump_config(config_to_save)
