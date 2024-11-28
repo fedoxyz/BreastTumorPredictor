@@ -1,5 +1,5 @@
 .aider*
 .env
 venv
-checkpoints/sam2/*.pth
+checkpoints/sam2/*.pt
 **/__pycache__/

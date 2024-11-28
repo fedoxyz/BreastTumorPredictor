@@ -53,7 +53,7 @@ def objective(trial):
     elif optimizer_type == 'adamw':
         optimizer = optim.AdamW(model.parameters(), lr=learning_rate, betas=(beta1, beta2), weight_decay=weight_decay)
     else:
-        optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum = momentum, weight_delay=weight_decay)
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum = momentum, weight_decay=weight_decay)
 
     if scheduler_type == 'StepLR':
         scheduler = StepLR(optimizer, step_size=10, gamma=0.7)
