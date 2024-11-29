@@ -10,7 +10,6 @@ import optuna
 from torchinfo import summary
 from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
 
-
 def objective(trial):
     config = load_config()
     device = config["train"]["device"]
@@ -18,7 +17,7 @@ def objective(trial):
     # Suggest hyperparameters
     learning_rate = trial.suggest_float('learning_rate', 1e-4, 1e-1, log=True)
     weight_decay = trial.suggest_float('weight_decay', 1e-8, 1e-3, log=True)
-    batch_size = trial.suggest_int('batch_size', 16, 64)
+    batch_size = trial.suggest_int('batch_size', 4, 16)
     weight_bce = trial.suggest_float('weight_bce', 0.1, 2.0)
     weight_dice = trial.suggest_float('weight_dice', 0.1, 2.0)
     weight_iou = trial.suggest_float('weight_iou', 0.1, 2.0)
@@ -128,6 +127,7 @@ def save_params(config, trial):
 
 if __name__ == "__main__":
     config = load_config()
+
 
     # Create a study and optimize the objective function
     study = optuna.create_study(direction='minimize')

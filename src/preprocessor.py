@@ -26,7 +26,7 @@ class ImageDataset(Dataset):
      
             for file_name in class_files:
                 # Append full path relative to class directory
-                self.image_files.append(os.path.join(class_label, 'image', file_name))
+                self.image_files.append(os.path.join(class_label, 'images', file_name))
                 self.labels.append(int(class_label))  # Store label as integer
         
 
@@ -40,29 +40,41 @@ class ImageDataset(Dataset):
 
         # Ensure correct path construction
         image_path = os.path.join(self.data_dir, self.image_files[idx])
-        mask_path = image_path.replace('image/', 'masks/').replace('.jpg', '_mask.jpg')
+        mask_path = image_path.replace('images/', 'masks/').replace('.jpg', '_mask.jpg')
+        
+        #print(f"image path: {image_path}\nmask path: {mask_path}")
 
         image = cv2.imread(image_path)[..., ::-1]  # Convert BGR to RGB
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-
+        
+        #print(f"image - {image}\nmask - {mask}")
         if image is None or mask is None:
             raise ValueError(f"Error loading image or mask: {image_path}, {mask_path}")
 
         # Apply augmentations if configured
         if self.config["data"]["augmentation"]["flip"]:
+            #print("apply flip")
             if np.random.rand() > 0.5:
                 image = np.fliplr(image)
                 mask = np.fliplr(mask)
 
         if self.config["data"]["augmentation"]["rotation"]:
+            #print("apply rotation")
             angle = np.random.uniform(-self.config["data"]["augmentation"]["rotation"], self.config["data"]["augmentation"]["rotation"])
             image = self.rotate_image(image, angle)
             mask = self.rotate_image(mask, angle, is_mask=True)
-
+        
+        #print("resizing image and mask")
         # Resize image and mask
-        image = cv2.resize(image, (self.img_size, self.img_size))
-        mask = cv2.resize(mask, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
+#        image = cv2.resize(image, (self.img_size, self.img_size))
+#        mask = cv2.resize(mask, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST) 
+#        image = cv2.resize(image, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
+#        mask = cv2.resize(mask, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
 
+        image = cv2.resize(image, self.img_size, interpolation = cv2.INTER_AREA)
+        mask = cv2.resize(mask, self.img_size, interpolation = cv2.INTER_AREA)
+
+        #print("normalizing")
         # Normalize image
         image = image.astype(np.float32) / 255.0
 
@@ -74,6 +86,13 @@ class ImageDataset(Dataset):
         mask = np.expand_dims(mask, axis=0)
 
         label = self.labels[idx]
+       # display_image = image.transpose(1, 2, 0)  # Convert back to H x W x C for display
+       # display_mask = mask.squeeze()  # Remove the extra dimension for display
+       # cv2.imshow("Image", display_image)
+       # cv2.imshow("Mask", display_mask * 255)  # Scale mask to 0-255 range for display
+       # cv2.waitKey(0)
+       # cv2.destroyAllWindows()
+
         return image, mask, label
 
     def rotate_image(self, image, angle, is_mask=False):
